@@ -1,0 +1,180 @@
+#!/bin/bash
+
+# Copyright 2019 Tad Lebeck
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+if [ "$#" != "2" ] ; then
+    echo Usage: `basename $0` "<bucket> <region>"
+    exit
+fi
+
+bucket=$1
+region=$2
+
+lunsize=100
+datadir=/tmp
+es1dir=${datadir}/extentstore1
+es2dir=${datadir}/extentstore2
+lun=${datadir}/lun
+
+cascadebucket=$bucket
+cascaderegion=$region
+
+if [ ! -d ~/.aws ] ; then
+    echo "You should set up your S3 configuration in the $HOME/.aws directory"
+    exit
+fi
+
+if [ -z $AWS_BUCKET ] ; then
+    echo "To make this script run against your own bucket"
+    echo "   export AWS_BUCKET=<your bucket name>"
+    echo "Example:"
+    echo "  export AWS_BUCKET=nuvomike20180423"
+    exit
+fi
+
+bucket=${AWS_BUCKET}
+
+thisdir=`pwd`
+prog=./`basename $thisdir`
+
+function message {
+    _count=`echo $* | wc -c`
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+    echo $*
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+}
+function random {
+    echo $(( $RANDOM % $1 ))
+}
+
+function writerandom {
+    _lun=$1
+    block=`random ${lunsize}`
+    echo "Writing LUN $_lun at block $block"
+    dd if=/dev/urandom of=$_lun bs=1M seek=$block count=1 conv=notrunc > /dev/null 2>&1
+}
+
+message "Building"
+go build
+
+if [ "$?" = 0 ] ; then
+    echo "Build Succeeded"
+else
+    echo "Build Failed"
+    exit
+fi
+
+message "Cleaning out the Old Extent Stores"
+set -x
+rm -rf ${es1dir}
+mkdir -p ${es1dir}/data
+rm -rf ${es2dir}
+mkdir -p ${es2dir}/data
+set +x
+
+# message "Creating random content lun"
+# dd if=/dev/urandom of=$lun bs=1M count=$lunsize
+
+message "Creating random content lun"
+set -x
+dd if=/dev/zero of=$lun bs=1M count=$lunsize > /dev/null 2>&1
+set +x
+
+message "Doing backup to null"
+$prog -srctype file -srcarg $lun -dsttype null
+
+message "nuvo -> null"
+lunbytes=$(( $lunsize * 1024 * 1024 ))
+./copy -srctype nuvo -srcarg `uuidgen`,,incr,$lunbytes,sock -dsttype null
+
+message "null -> file"
+$prog -srctype null -dsttype file -dsttype file -dstarg $lun
+
+message "file -> directory ES1 snap base"
+$prog -srctype file -srcarg $lun -dsttype dir -dstarg ${es1dir},ES1,,base
+
+message "Writing Random data to the lun"
+count=$(( $lunsize >> 3 )) # 12%
+for i in `seq 1 $count` ; do
+    writerandom $lun
+done
+
+message "file -> dir ES1 incr"
+$prog -srctype file -srcarg $lun -dsttype dir -dstarg ${es1dir},ES1,base,incr
+
+message "dir ES1 base,incr -> null"
+$prog -srctype dir -srcarg ${es1dir},ES1,base,incr -dsttype null
+
+message "dir ES1 0,base -> dir ES2 base (base cascade)"
+$prog -srctype dir -srcarg ${es1dir},ES1,,base -dsttype dir -dstarg ${es1dir},ES2,,base
+
+message "dir ES1 base,incr -> dir ES2 base,incr (incremental cascade)"
+$prog -srctype dir -srcarg ${es1dir},ES1,base,incr -dsttype dir -dstarg ${es1dir},ES2,base,incr
+
+message "Creating restore destination"
+rlun=${lun}_restore1
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "dir ES2 0,base -> restore lun (base snap restore)"
+$prog -srctype dir -srcarg ${es1dir},ES2,,base -dsttype file -dstarg ${rlun}
+
+message "dir ES2 base,incr -> restore lun (incr snap restore)"
+$prog -srctype dir -srcarg ${es1dir},ES2,base,incr -dsttype file -dstarg ${rlun}
+
+message "Diffing orginal Lun and the incrementally restored lun"
+diff ${lun} ${rlun}
+
+if [ "$?" = "0" ] ; then
+    echo "Original and Restored LUNs Match" 
+    rm ${rlun}
+fi
+
+#message "setting up a delayed deletion"
+#(sleep 1 ; mv ${es1dir} ${es1dir}.sav ; echo "Deleted" ) &
+
+message "dir ES1 0,base -> S3 ES1 (base update to S3)"
+$prog -srctype dir -srcarg ${es1dir},ES1,,base -dsttype s3 -dstarg ${bucket},${region},ES1,,base
+
+message "dir ES1 base,incr -> S3 ES1 (incremental update to S3)"
+$prog -srctype dir -srcarg ${es1dir},ES1,base,incr -dsttype s3 -dstarg ${bucket},${region},ES1,base,incr
+
+message "S3 0,incr ES1 -> S3 ES2 (all data to second extent store)"
+$prog -srctype s3 -srcarg ${bucket},${region},ES1,,incr -dsttype s3 -dstarg ${cascadebucket},${cascaderegion},ES2,,incr
+
+message "Creating restore lun"
+rlun=${lun}_restore2
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "S3 all data -> file (Restoring from cascaded S3 extent store)"
+$prog -srctype s3 -srcarg ${cascadebucket},${cascaderegion},ES2,,incr -dsttype file -dstarg ${rlun}
+
+message "Diffing Combined restore from S3 against original LUN"
+diff ${lun} ${rlun}
+
+if [ "$?" = "0" ] ; then
+    echo No Difference
+    rm ${rlun}
+fi
+

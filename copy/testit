@@ -1,0 +1,364 @@
+#!/bin/bash
+
+# Copyright 2019 Tad Lebeck
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+lunsize=100
+datadir=/tmp
+es1dir=${datadir}/extentstore1
+es2dir=${datadir}/extentstore2
+lun=${datadir}/lun
+
+vs_name=VolSeries
+
+aws_bucket=nuvomike20180423
+aws_region="us-west-1"
+
+cascadebucket=$aws_bucket
+cascaderegion=$aws_region
+
+#google_bucket=nuvomike20180723
+google_bucket=nuvomike06072018
+azure_bucket=bucket
+
+if [ ! -d ~/.aws ] ; then
+    echo "You should set up your S3 configuration in the $HOME/.aws directory"
+    exit
+fi
+
+if [ -z $AZURE_STORAGE_ACCOUNT ] || [ -z $AZURE_STORAGE_ACCESS_KEY ] ; then
+    echo "AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_ACCESS_KEY environment variables must be set for this test to work"
+    exit
+fi
+
+if [ -z $GOOGLE_APPLICATION_CREDENTIALS ] ; then
+    echo "GOOGLE_APPLICATION_CREDENTIALS environment variable must be set for this test to work"
+    exit
+fi
+
+thisdir=`pwd`
+#prog="./`basename $thisdir` -threads 1"
+prog=./`basename $thisdir`
+
+function message {
+    _count=`echo $* | wc -c`
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+    echo $*
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+}
+function random {
+    echo $(( $RANDOM % $1 ))
+}
+
+function writerandom {
+    _lun=$1
+    block=`random ${lunsize}`
+    echo "Writing LUN $_lun at block $block"
+    dd if=/dev/urandom of=$_lun bs=1M seek=$block count=1 conv=notrunc > /dev/null 2>&1
+}
+
+function assert {
+    if [ $rc -ne 0 ] ; then
+        echo "Aborting due to error"
+        exit $1
+    fi
+}
+
+###############
+# Build First #
+###############
+
+message "Building"
+go build
+
+if [ "$?" = 0 ] ; then
+    echo "Build Succeeded"
+else
+    echo "Build Failed"
+    exit
+fi
+
+############
+# Clean Up #
+############
+
+message "Cleaning out the Old Extent Stores"
+set -x
+rm -rf ${es1dir}
+mkdir -p ${es1dir}/data
+rm -rf ${es2dir}
+mkdir -p ${es2dir}/data
+set +x
+
+########################
+# Create Simulated LUN #
+########################
+
+# message "Creating random content lun"
+# dd if=/dev/urandom of=$lun bs=1M count=$lunsize
+
+message "Creating random content lun"
+set -x
+dd if=/dev/zero of=$lun bs=1M count=$lunsize > /dev/null 2>&1
+set +x
+
+#########################
+# Null Endpoint Testing #
+#########################
+
+message "Doing backup to null"
+set -x
+$prog -srctype file -srcarg $lun -dsttype null
+rc=$?
+set +x
+assert
+
+message "nuvo -> null"
+lunbytes=$(( $lunsize * 1024 * 1024 ))
+./copy -srctype nuvo -srcarg `uuidgen`,,incr,$lunbytes,sock -dsttype null
+
+message "null -> file"
+set -x
+$prog -srctype null -dsttype file -dsttype file -dstarg $lun
+rc=$?
+set +x
+assert
+
+##############################################################
+# Setup Base and Incremental Snapshots in Directory Endpoint #
+##############################################################
+
+message "file -> directory ES1 snap base"
+set -x
+$prog -srctype file -srcarg $lun -dsttype dir -dstarg ${es1dir},ES1,${vs_name},,base
+rc=$?
+set +x
+assert
+
+message "Writing Random data to the lun"
+count=$(( $lunsize >> 3 )) # 12%
+for i in `seq 1 $count` ; do
+    writerandom $lun
+done
+
+message "file -> dir ES1 incr"
+set -x
+$prog -srctype file -srcarg $lun -dsttype dir -dstarg ${es1dir},ES1,${vs_name},base,incr
+rc=$?
+set +x
+assert
+
+##############################################
+# Incremental Cascade to second Extent Store #
+##############################################
+
+message "dir ES1 0,base -> dir ES2 base (base cascade)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},,base -dsttype dir -dstarg ${es1dir},ES2,${vs_name},,base
+rc=$?
+set +x
+assert
+
+message "dir ES1 base,incr -> dir ES2 base,incr (incremental cascade)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},base,incr -dsttype dir -dstarg ${es1dir},ES2,${vs_name},base,incr
+rc=$?
+set +x
+assert
+
+message "Creating restore destination"
+rlun=${lun}_restore1
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "dir ES2 0,base -> restore lun (base snap restore)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES2,${vs_name},,base -dsttype file -dstarg ${rlun}
+rc=$?
+set +x
+assert
+
+message "dir ES2 base,incr -> restore lun (incr snap restore)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES2,${vs_name},base,incr -dsttype file -dstarg ${rlun}
+rc=$?
+set +x
+assert
+
+message "Diffing orginal Lun and the incrementally restored lun"
+diff ${lun} ${rlun}
+
+if [ "$?" = "0" ] ; then
+    echo "Original and Restored LUNs Match" 
+    rm ${rlun}
+fi
+
+#message "setting up a delayed deletion"
+#(sleep 1 ; mv ${es1dir} ${es1dir}.sav ; echo "Deleted" ) &
+
+#################
+# Azure Testing #
+#################
+
+message "directory base -> Azure ES1 base (base update to Azure)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},,base -dsttype az -dstarg ${azure_bucket},ES1,${vs_name},,base
+rc=$?
+set +x
+assert
+
+message "directory incremental -> Azure ES1 incremental (incremental update to Azure)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},base,incr -dsttype az -dstarg ${azure_bucket},ES1,${vs_name},base,incr
+rc=$?
+set +x
+assert
+
+message "Creating restore lun"
+rlun=${lun}_restoreaz
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "Azure all data -> file (Restoring from Azure extent store)"
+set -x
+$prog -srctype az -srcarg ${azure_bucket},ES1,${vs_name},,incr -dsttype file -dstarg ${rlun}
+rc=$?
+set +x
+assert
+
+message "Diffing restore from Azure against original LUN"
+diff ${lun} ${rlun}
+
+rc=$?
+
+if [ "$rc" = "0" ] ; then
+    echo No Difference, Passed
+    rm ${rlun}
+else
+    echo "Difference found"
+fi
+assert
+
+##################
+# Google Testing #
+##################
+
+message "directory base -> Google ES1 base (base update to Google)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},,base -dsttype gc -dstarg ${google_bucket},ES1,${vs_name},,base
+rc=$?
+set +x
+assert
+
+message "directory incremental -> Google ES1 incremental (incremental update to Google)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},base,incr -dsttype gc -dstarg ${google_bucket},ES1,${vs_name},base,incr
+rc=$?
+set +x
+assert
+
+message "Creating restore lun"
+rlun=${lun}_restoreg
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "Google all data -> file (Restoring from Google extent store)"
+set -x
+$prog -srctype gc -srcarg ${google_bucket},ES1,${vs_name},,incr -dsttype file -dstarg ${rlun}
+rc=$?
+set +x
+assert
+
+message "Diffing restore from Google against original LUN"
+diff ${lun} ${rlun}
+
+rc=$?
+
+if [ "$rc" = "0" ] ; then
+    echo No Difference, Passed
+    rm ${rlun}
+else
+    echo "Difference found"
+fi
+assert
+
+##############
+# S3 Testing #
+##############
+
+message "dir ES1 0,base -> S3 ES1 (base update to S3)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},,base -dsttype s3 -dstarg ${aws_bucket},${aws_region},ES1,${vs_name},,base
+rc=$?
+set +x
+assert
+
+message "dir ES1 base,incr -> S3 ES1 (incremental update to S3)"
+set -x
+$prog -srctype dir -srcarg ${es1dir},ES1,${vs_name},base,incr -dsttype s3 -dstarg ${aws_bucket},${aws_region},ES1,${vs_name},base,incr
+rc=$?
+set +x
+assert
+
+message "S3 0,incr ES1 -> S3 ES2 (all data to second extent store)"
+set -x
+$prog -srctype s3 -srcarg ${aws_bucket},${aws_region},ES1,${vs_name},,incr -dsttype s3 -dstarg ${cascadebucket},${cascaderegion},ES2,${vs_name},,incr
+rc=$?
+set +x
+assert
+
+####################################################
+# Cascade from S3 to second Extent Store on Google #
+####################################################
+
+message "S3 ES1 0,base -> Google ES2 (Full cascade to Google)"
+set -x
+$prog -srctype s3 -srcarg ${aws_bucket},${aws_region},ES1,${vs_name},,incr -dsttype gc -dstarg ${google_bucket},ES2,${vs_name},,incr
+rc=$?
+set +x
+assert
+
+message "Creating restore lun"
+rlun=${lun}_restore2
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "S3 all data -> file (Restoring from cascaded S3 extent store)"
+set -x
+$prog -srctype s3 -srcarg ${cascadebucket},${cascaderegion},ES2,${vs_name},,incr -dsttype file -dstarg ${rlun}
+rc=$?
+set +x
+assert
+
+message "Diffing Combined restore from S3 against original LUN"
+diff ${lun} ${rlun}
+rc=$?
+
+if [ "$rc" = "0" ] ; then
+    echo No Difference, Passed
+    rm ${rlun}
+else
+    echo Difference Found
+fi
+assert

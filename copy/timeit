@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# Copyright 2019 Tad Lebeck
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+lunsize=500
+datadir=/tmp
+es1dir=${datadir}/extentstore1
+es2dir=${datadir}/extentstore2
+lun=${datadir}/lun
+
+thisdir=`pwd`
+prog=./`basename $thisdir`
+
+function message {
+    _count=`echo $* | wc -c`
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+    echo $*
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+}
+function random {
+    echo $(( $RANDOM % $1 ))
+}
+
+function writerandom {
+    _lun=$1
+    block=`random ${lunsize}`
+    echo "Writing LUN $_lun at block $block"
+    dd if=/dev/urandom of=$_lun bs=1M seek=$block count=1 conv=notrunc > /dev/null 2>&1
+}
+
+message "Building"
+go build
+
+if [ "$?" = 0 ] ; then
+    echo "Build Succeeded"
+else
+    echo "Build Failed"
+    exit
+fi
+
+message "Creating random out content lun"
+set -x
+dd if=/dev/urandom of=$lun bs=1M count=$lunsize > /dev/null 2>&1
+set +x
+
+for t in `seq 1 50` ; do
+    message "Cleaning out the Old Extent Stores"
+    set -x
+    rm -rf ${es1dir}
+    mkdir -p ${es1dir}/data
+    set +x
+
+    message "file -> directory ES1 snap base"
+    set -x
+    time $prog -threads $t -srctype file -srcarg $lun -dsttype dir -dstarg ${es1dir},ES1,,base
+    set +x
+done
+

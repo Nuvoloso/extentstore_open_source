@@ -1,0 +1,171 @@
+hash: 2656f81dd0983a5c974590ae479e881c6c4506a740e138e6b137206ebfb79341
+updated: 2018-08-17T19:19:45.386857806Z
+imports:
+- name: cloud.google.com/go
+  version: 203e92bc424cca15dd2d1aa1a6574923c480083d
+  subpackages:
+  - compute/metadata
+  - iam
+  - internal
+  - internal/optional
+  - internal/trace
+  - internal/version
+  - storage
+- name: contrib.go.opencensus.io/exporter/stackdriver
+  version: f7f5758592258ab71384efef9cdb0daf785a9ab1
+  subpackages:
+  - propagation
+- name: github.com/aws/aws-sdk-go-v2
+  version: 295bebb2e006e56d9f914d2680d7a9edafe45405
+  subpackages:
+  - aws
+  - aws/awserr
+  - aws/defaults
+  - aws/ec2metadata
+  - aws/ec2rolecreds
+  - aws/endpointcreds
+  - aws/endpoints
+  - aws/external
+  - aws/signer/v4
+  - aws/stscreds
+  - internal/awsutil
+  - internal/ini
+  - internal/sdk
+  - private/protocol
+  - private/protocol/query
+  - private/protocol/query/queryutil
+  - private/protocol/rest
+  - private/protocol/restxml
+  - private/protocol/xml
+  - private/protocol/xml/xmlutil
+  - service/s3
+  - service/sts
+- name: github.com/Azure/azure-pipeline-go
+  version: 7571e8eb0876932ab505918ff7ed5107773e5ee2
+  subpackages:
+  - pipeline
+- name: github.com/azure/azure-storage-blob-go
+  version: 197d1c0aea1b9eedbbaee0a1a32bf81e879bde80
+  subpackages:
+  - 2018-03-28/azblob
+- name: github.com/golang/protobuf
+  version: aa810b61a9c79d51363740d207bb46cf8e620ed5
+  subpackages:
+  - proto
+  - protoc-gen-go/descriptor
+  - ptypes
+  - ptypes/any
+  - ptypes/duration
+  - ptypes/timestamp
+- name: github.com/googleapis/gax-go
+  version: 1ef592c90f479e3ab30c6c2312e20e13881b7ea6
+- name: github.com/jmespath/go-jmespath
+  version: c2b33e8439af944379acbdd9c3a5fe0bc44bd8a5
+- name: github.com/Nuvoloso/kontroller
+  version: fac2ae24dedcd5d4f81defe61895be0ff5e5a225
+  subpackages:
+  - pkg/nuvoapi
+  - pkg/nuvoapi/nuvo_pb
+- name: go.opencensus.io
+  version: 1789eaf7638d6f16d055afd35654928c04663cfc
+  subpackages:
+  - internal
+  - internal/tagencoding
+  - plugin/ochttp
+  - plugin/ochttp/propagation/b3
+  - stats
+  - stats/internal
+  - stats/view
+  - tag
+  - trace
+  - trace/internal
+  - trace/propagation
+- name: golang.org/x/net
+  version: aaf60122140d3fcf75376d319f0554393160eb50
+  subpackages:
+  - context
+  - context/ctxhttp
+  - http/httpguts
+  - http2
+  - http2/hpack
+  - idna
+  - internal/timeseries
+  - trace
+- name: golang.org/x/oauth2
+  version: 3d292e4d0cdc3a0113e6d207bb137145ef1de42f
+  subpackages:
+  - google
+  - internal
+  - jws
+  - jwt
+- name: golang.org/x/sys
+  version: 1c9583448a9c3aa0f9a6a5241bf73c0bd8aafded
+  subpackages:
+  - unix
+- name: golang.org/x/text
+  version: 6e3c4e7365ddcc329f090f96e4348398f6310088
+  subpackages:
+  - secure/bidirule
+  - transform
+  - unicode/bidi
+  - unicode/norm
+- name: google.golang.org/api
+  version: 0e8d13b5c025da6a7cf249bb854e5869921dd459
+  subpackages:
+  - gensupport
+  - googleapi
+  - googleapi/internal/uritemplates
+  - googleapi/transport
+  - internal
+  - iterator
+  - option
+  - storage/v1
+  - transport/http
+- name: google.golang.org/appengine
+  version: 4216e58b9158e5f1c906f1aca75162a46a2ec88a
+  subpackages:
+  - internal
+  - internal/app_identity
+  - internal/base
+  - internal/datastore
+  - internal/log
+  - internal/modules
+  - internal/remote_api
+  - internal/urlfetch
+  - urlfetch
+- name: google.golang.org/genproto
+  version: c66870c02cf823ceb633bcd05be3c7cda29976f4
+  subpackages:
+  - googleapis/api/annotations
+  - googleapis/iam/v1
+  - googleapis/rpc/code
+  - googleapis/rpc/status
+- name: google.golang.org/grpc
+  version: 9907ae0e57ce159e835381ed54eb271206bf7b12
+  subpackages:
+  - balancer
+  - balancer/base
+  - balancer/roundrobin
+  - codes
+  - connectivity
+  - credentials
+  - encoding
+  - encoding/proto
+  - grpclog
+  - internal
+  - internal/backoff
+  - internal/channelz
+  - internal/envconfig
+  - internal/grpcrand
+  - internal/transport
+  - keepalive
+  - metadata
+  - naming
+  - peer
+  - resolver
+  - resolver/dns
+  - resolver/passthrough
+  - stats
+  - status
+  - tap
+testImports: []

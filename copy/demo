@@ -1,0 +1,122 @@
+#!/bin/bash
+# Copyright 2019 Tad Lebeck
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+lunsize=100
+datadir=/tmp
+es1dir=${datadir}/extentstore1
+es2dir=${datadir}/extentstore2
+lun=${datadir}/lun
+bucket=nuvomike20180423
+region=us-west-1
+cascadebucket=nuvomikeeast
+cascaderegion=us-east-1
+vol=volname
+
+if [ ! -d ~/.aws ] ; then
+    echo "You should set up your S3 configuration in the $HOME/.aws directory"
+    exit
+fi
+
+thisdir=`pwd`
+prog=./`basename $thisdir`
+
+function message {
+    echo -n "Hit Enter to continue>" ; read ch
+    _count=`echo $* | wc -c`
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+    echo $*
+    for c in `seq 2 $_count` ; do
+        echo -n "="
+    done
+    echo ""
+}
+function random {
+    echo $(( $RANDOM % $1 ))
+}
+
+function writerandom {
+    _lun=$1
+    block=`random ${lunsize}`
+    echo "Writing LUN $_lun at block $block"
+    dd if=/dev/urandom of=$_lun bs=1M seek=$block count=1 conv=notrunc > /dev/null 2>&1
+}
+
+function comparelun {
+    _luna=$1
+    _lunb=$2
+    diff ${_luna} ${_lunb}
+
+    if [ "$?" = "0" ] ; then
+        echo No Difference $_luna $_lunb
+        rm $rlun
+    fi
+}
+
+message "Creating zeroed content lun"
+set -x
+dd if=/dev/zero of=$lun bs=1M count=$lunsize > /dev/null 2>&1
+set +x
+
+message "lun -> directory ES1 snap base"
+set -x
+$prog -srctype file -srcarg $lun -dsttype s3 -dstarg ${bucket},${region},ES1,${vol},,base
+set +x
+
+message "Writing Random data to the lun 12%"
+count=$(( $lunsize >> 3 )) # 12%
+for i in `seq 1 $count` ; do
+    writerandom $lun
+done
+
+message "lun -> S3 ES1 snap incr"
+set -x
+$prog -srctype file -srcarg $lun -dsttype s3 -dstarg ${bucket},${region},ES1,${vol},base,incr
+set +x
+
+message "Cascade of S3 0,incr ES1 -> S3 ES2 (all data to second extent store)"
+set -x
+$prog -srctype s3 -srcarg ${bucket},${region},ES1,${vol},,incr -dsttype s3 -dstarg ${cascadebucket},${cascaderegion},ES2,${vol},,incr
+set +x
+
+message "Creating restore lun"
+rlun=${lun}_restore
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "S3 all data -> file (Restoring from S3 extent store)"
+set -x
+$prog -srctype s3 -srcarg ${bucket},${region},ES1,${vol},,incr -dsttype file -dstarg ${rlun}
+set +x
+
+message "Diffing Combined restore from S3 against original LUN"
+comparelun ${lun} ${rlun}
+
+message "Creating restore lun2"
+rlun=${lun}_restore2
+set -x
+dd if=/dev/zero of=${rlun} bs=1M seek=$(( $lunsize - 1 )) count=1 > /dev/null 2>&1
+set +x
+
+message "S3 all data -> file (Restoring from cascaded S3 extent store)"
+set -x
+$prog -srctype s3 -srcarg ${cascadebucket},${cascaderegion},ES2,${vol},,incr -dsttype file -dstarg ${rlun}
+set +x
+
+message "Diffing Combined restore from S3 against original LUN"
+comparelun ${lun} ${rlun}
